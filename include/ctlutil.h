@@ -156,7 +156,7 @@ namespace CTL
 		}
 		BOOL RemoveAt(int nIndex)
 		{
-			ATLASSERT(nIndex >= 0 && nIndex < m_nSize);
+			CTLASSERT(nIndex >= 0 && nIndex < m_nSize);
 			if (nIndex < 0 || nIndex >= m_nSize)
 				return FALSE;
 			m_aT[nIndex].~T();
@@ -368,7 +368,7 @@ namespace CTL
 		}
 		TKey& GetKeyAt(int nIndex) const
 		{
-			ATLASSERT(nIndex >= 0 && nIndex < m_nSize);
+			CTLASSERT(nIndex >= 0 && nIndex < m_nSize);
 			if(nIndex < 0 || nIndex >= m_nSize)
 				CTLRaiseException((DWORD)EXCEPTION_ARRAY_BOUNDS_EXCEEDED);
 
@@ -376,7 +376,7 @@ namespace CTL
 		}
 		TVal& GetValueAt(int nIndex) const
 		{
-			ATLASSERT(nIndex >= 0 && nIndex < m_nSize);
+			CTLASSERT(nIndex >= 0 && nIndex < m_nSize);
 			if(nIndex < 0 || nIndex >= m_nSize)
 				CTLRaiseException((DWORD)EXCEPTION_ARRAY_BOUNDS_EXCEEDED);	
 
@@ -438,7 +438,144 @@ namespace CTL
 		}
 	};
 
+	// Sync Classes
+	class CCTLCriticalSection
+	{
+	public:
+		CCTLCriticalSection() throw()
+		{
+			memset(&m_sec, 0, sizeof(CRITICAL_SECTION));
+		}
 
+		~CCTLCriticalSection()
+		{
+		}
+
+		HRESULT Lock() throw()
+		{
+			EnterCriticalSection(&m_sec);
+			return S_OK;
+		}
+		HRESULT Unlock() throw()
+		{
+			LeaveCriticalSection(&m_sec);
+			return S_OK;
+		}
+		HRESULT Init() throw()
+		{
+			HRESULT hRes = S_OK;
+			if (!InitializeCriticalSectionAndSpinCount(&m_sec, 0))
+			{
+				hRes = HRESULT_FROM_WIN32(GetLastError());
+			}
+
+			return hRes;
+		}
+
+		HRESULT Term() throw()
+		{
+			DeleteCriticalSection(&m_sec);
+			return S_OK;
+		}
+		CRITICAL_SECTION m_sec;
+	};
+	template< class TLock >
+	class CCTLCritSecLock
+	{
+	public:
+			CCTLCritSecLock(
+				TLock& cs,
+				bool bInitialLock = true);
+
+			~CCTLCritSecLock() throw();
+
+			HRESULT Lock() throw();
+
+			void Unlock() throw();
+
+		// Implementation
+	private:
+		TLock& m_cs;
+		bool m_bLocked;
+
+		// Private to avoid accidental use
+		CCTLCritSecLock(_In_ const CCTLCritSecLock&) throw();
+		CCTLCritSecLock& operator=(_In_ const CCTLCritSecLock&) throw();
+	};
+	template< class TLock >
+	#pragma warning(suppress: 26166 28196) // Constructor throws on failure of Lock() method
+	inline CCTLCritSecLock< TLock >::CCTLCritSecLock(
+			TLock& cs,
+			bool bInitialLock) :m_cs(cs),m_bLocked(false)
+	{
+		if (bInitialLock)
+		{
+			HRESULT hr;
+
+			hr = Lock();
+			if (FAILED(hr))
+			{
+				throw CCTLException(hr);
+			}
+		}
+	}
+
+	template< class TLock >
+	inline CCTLCritSecLock< TLock >::~CCTLCritSecLock() throw()
+	{
+		if (m_bLocked)
+		{
+			Unlock();
+		}
+	}
+
+	template< class TLock >
+	#pragma warning(suppress: 26165) // Lock is acquired by template lock object '(this->m_cs).m_sec'
+	inline HRESULT CCTLCritSecLock< TLock >::Lock() throw()
+	{
+		HRESULT hr;
+
+		CTLASSERT(!m_bLocked);
+		hr = m_cs.Lock();
+		if (FAILED(hr))
+		{
+			return(hr);
+		}
+		m_bLocked = true;
+
+		return(S_OK);
+	}
+
+	template< class TLock >
+	#pragma warning(suppress: 26167) // Lock is released by template lock object '(this->m_cs).m_sec'
+	inline void CCTLCritSecLock< TLock >::Unlock() throw()
+	{
+		#pragma warning(suppress: 26110) // Template parameter hides lock object
+		m_cs.Unlock();
+		m_bLocked = false;
+	}
+	///////////////////////////////////////////////////////////////////////////////
+	// CStaticDataInitCriticalSectionLock and CWindowCreateCriticalSectionLock
+	// internal classes to manage critical sections for both ATL3 and ATL7
+	CCTLCriticalSection m_csStaticDataInitAndTypeInfo;
+	class CStaticDataInitCriticalSectionLock
+	{
+	public:
+		CCTLCritSecLock<CCTLCriticalSection> m_cslock;
+
+		CStaticDataInitCriticalSectionLock() : m_cslock(m_csStaticDataInitAndTypeInfo, false)
+		{ }
+
+		HRESULT Lock()
+		{
+			return m_cslock.Lock();
+		}
+
+		void Unlock()
+		{
+			m_cslock.Unlock();
+		}
+	};
 };
 #pragma pop_macro("new")
 #pragma pop_macro("free")
